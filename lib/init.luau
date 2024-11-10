@@ -1,6 +1,6 @@
---!native
---!optimize 2
---!strict
+--!native 
+--!optimize 2 
+--!strict 
 
 type EntityId = number
 type ComponentId = number
@@ -61,15 +61,15 @@ local Yumina = {}
 Yumina.__index = Yumina
 
 export type Yumina = typeof(setmetatable({
-    _archetypeIndex = {} :: {[number]: Archetype},
-    _entityIndex = {} :: {[EntityId]: Archetype},
-    _freeList = {} :: {EntityId},
-    _generations = {} :: {[EntityId]: Generation},
+    _archetypeIndex = {} :: { [number]: Archetype },
+    _entityIndex = {} :: { [EntityId]: Archetype },
+    _freeList = {} :: { EntityId},
+    _generations = {} :: { [EntityId]: Generation },
     _nextId = 1 :: EntityId,
     _edgeCache = {} :: ArchetypeEdgeCache,
-    _queryCache = {} :: {[number]: QueryObject},
-    _transitionCache = {} :: {[TransitionKey]: TransitionInfo},
-    _pendingMoves = {} :: {MoveCommand},
+    _queryCache = {} :: { [number]: QueryObject },
+    _transitionCache = {} :: { [TransitionKey]: TransitionInfo },
+    _pendingMoves = {} :: { MoveCommand },
 }, Yumina))
 
 local function GetBitmaskIndex(componentId: number): number
@@ -92,7 +92,7 @@ local function GetArchetypeKey(bitmasks: {number}): number
     return bitmasks[1] + (bitmasks[2] * 0x100000000)
 end
 
-local function GetTransitionKey(sourceBitmasks: {number}, destBitmasks: {number}): number
+local function GetTransitionKey(sourceBitmasks: { number }, destBitmasks: { number }): number
     return sourceBitmasks[1] + (destBitmasks[1] * 0x100000000)
 end
 
@@ -168,7 +168,7 @@ function Yumina.Despawn(self: Yumina, encodedId: EntityId): ()
     self._freeList[#self._freeList + 1] = entityId
 end
 
-function Yumina.__CreateArchetype(self: Yumina, bitmasks: {number}): Archetype
+function Yumina.__CreateArchetype(self: Yumina, bitmasks: { number }): Archetype
     local archetype = {
         bitmasks = table.clone(bitmasks),
         componentData = {},
@@ -572,7 +572,7 @@ function Yumina.Query(self: Yumina, components: {ComponentId}): QueryObject
     return query
 end
 
-function Yumina:GetArchetypeInfo(entity: EntityId): {[string]: any}?
+function Yumina.GetArchetypeInfo(self: Yumina, entity: EntityId): { [string]: any }?
     local entityId = bit32.band(entity, ENTITY_MASK)
     local archetype = self._entityIndex[entityId]
     
@@ -588,7 +588,7 @@ function Yumina:GetArchetypeInfo(entity: EntityId): {[string]: any}?
     }
 end
 
-function Yumina:GetComponentData(entity: EntityId, component: ComponentId): any?
+function Yumina.Has(self: Yumina, entity: EntityId, component: ComponentId): any?
     local entityId = bit32.band(entity, ENTITY_MASK)
     local archetype = self._entityIndex[entityId]
     
@@ -602,23 +602,6 @@ function Yumina:GetComponentData(entity: EntityId, component: ComponentId): any?
     end
     
     return componentArray[archetype.entityRow[entityId]]
-end
-
-function Yumina.Has(self: Yumina, entity: EntityId, component: ComponentId): boolean
-    local entityId = bit32.band(entity, ENTITY_MASK)
-    local archetype = self._entityIndex[entityId]
-    
-    if not archetype then
-        return false
-    end
-    
-    local maskIndex = GetBitmaskIndex(component)
-    local bitPosition = GetBitPosition(component)
-    
-    return bit32.band(
-        archetype.bitmasks[maskIndex],
-        bit32.lshift(1, bitPosition)
-    ) ~= 0
 end
 
 function Yumina.Cleanup(self: Yumina)
