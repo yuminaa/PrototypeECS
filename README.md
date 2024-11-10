@@ -1,6 +1,16 @@
 # YuminaECS
 
-Serves as a prototype ECS for a C++ port. Not ready for production as of right now.
+Serves as a prototype ECS for a C++ port.
+
+> [!WARNING]
+> Not ready for production as of right now.
+
+## Features
+- Lightweight and fast Entity Component System
+- Hierarchical entity relationships
+- Flexible component queries
+- Resource management system
+- Support for complex entity relationships
 
 ## Usage
 
@@ -15,11 +25,11 @@ local apple = world:Entity()
 world:Set(alice, components.eat, apple)
 
 for entity, eaten in world:Query(components.eat) do
-      -- do stuff
+    -- do stuff
 end
 ```
 
-### Complex Relationship
+### Complex
 ```lua
 local city = world:Entity()
 world:Set(city, Cenum.Name, "Metropolis-7")
@@ -35,13 +45,13 @@ for i = 1, 3 do
     world:Set(powerGrid, Cenum.ResourceType, "Power")
     
     for j = 1, 2 do
-        local powerStation = world:Entity()
-        world:Set(powerStation, Cenum.ChildOf, district)
-        world:Set(powerStation, Cenum.ConnectedGrid, powerGrid)
-        world:Set(powerStation, Cenum.Production, {
-            resource = "Power",
-            amount = 1000
-        })
+      local powerStation = world:Entity()
+      world:Set(powerStation, Cenum.ChildOf, district)
+      world:Set(powerStation, Cenum.ConnectedGrid, powerGrid)
+      world:Set(powerStation, Cenum.Production, {
+        resource = "Power",
+        amount = 1000
+      })
     end
     
     districts[i] = district
@@ -52,8 +62,8 @@ for i = 1, #districts do
     local next = districts[i % #districts + 1]
     
     world:Set(current, Cenum.ResourceSharing, {
-        partner = next,
-        resources = {"Power", "Water"}
+      partner = next,
+      resources = { "Power", "Water" }
     })
 end
 
@@ -62,7 +72,7 @@ end
 local machines = {}
 for entity, parent in world:Query(Cenum.ChildOf):View() do
     if parent == districtId and world:Has(entity, Cenum.PowerConsumption) then
-        table.insert(machines, entity)
+      table.insert(machines, entity)
     end
 end
 
@@ -72,14 +82,24 @@ local function CheckEntity(entityId)
     -- Check maintenance status
     local maintenance = world:GetComponentData(entityId, Cenum.MaintenanceData)
     if maintenance and maintenance.condition < 50 then
-        table.insert(needsMaintenance, entityId)
+      table.insert(needsMaintenance, entityId)
     end
     -- Recursively check children
     for childEntity, parent in world:Query(Cenum.ChildOf):View() do
-        if parent == entityId then
-            CheckEntity(childEntity)
-        end
+      if parent == entityId then
+        CheckEntity(childEntity)
+      end
     end
 end
 CheckEntity(districtId)
 ```
+
+## API Reference
+- `world:Entity()` - Creates a new entity
+- `world:Set(entity, component, value)` - Sets a component value for an entity
+- `world:Has(entity, component)` - Checks if entity has a component
+- `world:Query(component)` - Creates a query for entities with specified component
+- `world:GetComponentData(entity, component)` - Gets component data for an entity
+
+## License
+MIT License
