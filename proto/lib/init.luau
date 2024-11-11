@@ -1,6 +1,25 @@
+--[[ 
+    @brief A lightweight Entity Component System (ECS) implementation for Roblox Luau
+
+    This ECS implementation provides efficient component storage and querying capabilities
+    through archetype-based organization. It supports dynamic component addition/removal,
+    entity management, and optimized query operations.
+
+    Features:
+        - Efficient component storage using archetypes
+        - Fast entity creation and destruction
+        - Optimized component queries
+        - Automatic memory management
+        - Transition caching for improved performance
+        - Generational index for safe entity references
+
+    @note The system uses bit operations for component masking and supports up to 64 components
+        (2 bitmasks * 32 bits each)
+]]
+
 --!native 
 --!optimize 2 
---!strict 
+--!strict
 
 type EntityId = number
 type ComponentId = number
@@ -67,7 +86,7 @@ export type Yumina = typeof(setmetatable({
     _generations = {} :: { [EntityId]: Generation },
     _nextId = 1 :: EntityId,
     _edgeCache = {} :: ArchetypeEdgeCache,
-    _queryCache = {} :: { [number]: QueryObject },
+    _queryCache = {} :: { [number]: QueryViewer },
     _transitionCache = {} :: { [TransitionKey]: TransitionInfo },
     _pendingMoves = {} :: { MoveCommand },
 }, Yumina))
@@ -133,39 +152,42 @@ end
 
 function Yumina.Despawn(self: Yumina, encodedId: EntityId): ()
     local entityId = bit32.band(encodedId, ENTITY_MASK)
+    local generation = bit32.rshift(encodedId, GENERATION_SHIFT)
+    if self._generations[entityId] ~= generation then
+        return
+    end
+    
     local archetype = self._entityIndex[entityId]
-    
-    if not archetype then 
-		return 
-	end
-    
-    local row = archetype.entityRow[entityId]
-    if row == archetype.entityCount then
-        for _, componentArray in archetype.componentData do
-            componentArray[row] = nil
-        end
-    else
-        local lastEntity = archetype.entities[archetype.entityCount]
-        archetype.entities[row] = lastEntity
-        archetype.entityRow[lastEntity] = row
+    if archetype then
+        local row = archetype.entityRow[entityId]
+        if row == archetype.entityCount then
+            for _, componentArray in archetype.componentData do
+                componentArray[row] = nil
+            end
+        else
+            local lastEntity = archetype.entities[archetype.entityCount]
+            archetype.entities[row] = lastEntity
+            archetype.entityRow[lastEntity] = row
 
-        for _, componentArray in archetype.componentData do
-            componentArray[row] = componentArray[archetype.entityCount]
-            componentArray[archetype.entityCount] = nil
+            for _, componentArray in archetype.componentData do
+                componentArray[row] = componentArray[archetype.entityCount]
+                componentArray[archetype.entityCount] = nil
+            end
         end
+        
+        archetype.entityCount -= 1
+        archetype.entities[archetype.entityCount + 1] = nil
+        archetype.entityRow[entityId] = nil
+        
+        if archetype.entityCount == 0 then
+            self._archetypeIndex[GetArchetypeKey(archetype.bitmasks)] = nil
+        end
+        archetype.dirtyFlags = bit32.bor(archetype.dirtyFlags, DIRTY_REMOVAL)
     end
-
-    archetype.entityCount -= 1
-    archetype.entities[archetype.entityCount + 1] = nil
-    archetype.entityRow[entityId] = nil
+    
     self._entityIndex[entityId] = nil
-
-    if archetype.entityCount == 0 then
-        self._archetypeIndex[GetArchetypeKey(archetype.bitmasks)] = nil
-    end
-
-    archetype.dirtyFlags = bit32.bor(archetype.dirtyFlags, DIRTY_REMOVAL)
     self._freeList[#self._freeList + 1] = entityId
+    self._generations[entityId] = (self._generations[entityId] + 1) % MAX_GENERATION
 end
 
 function Yumina.__CreateArchetype(self: Yumina, bitmasks: { number }): Archetype
@@ -215,16 +237,21 @@ local function CreateTransitionInfo(source: Archetype, destination: Archetype): 
     }
 end
 
-function Yumina.__FastPathMove(
+function Yumina.__FastPathMove<T>(
     self: Yumina,
     entity: EntityId,
     source: Archetype,
     destination: Archetype,
     transition: TransitionInfo,
-    data: any?
+    data: T?
 )
-    local fromRow = source.entityRow[entity]
     local toRow = destination.entityCount + 1
+    local fromRow = source.entityRow[entity]
+    
+    if not fromRow then
+        print("[Yumina]: Attempted to move entity that doesn't exist in source archetype")
+        return
+    end
 
     destination.entities[toRow] = entity
     destination.entityRow[entity] = toRow
@@ -250,20 +277,22 @@ function Yumina.__FastPathMove(
         destArray[toRow] = data
     end
 
-    -- // FIXME: fromRow can be null
-    if fromRow ~= source.entityCount then
-        local lastEntity = source.entities[source.entityCount]
-        source.entities[fromRow] = lastEntity
-        source.entityRow[lastEntity] = fromRow
+    if source.entityCount > 0 then
+        if fromRow ~= source.entityCount then
+            local lastEntity = source.entities[source.entityCount]
+            if lastEntity then
+                source.entities[fromRow] = lastEntity
+                source.entityRow[lastEntity] = fromRow
 
-        for componentId in source.componentData do
-            local array = source.componentData[componentId]
-            array[fromRow] = array[source.entityCount]
-            array[source.entityCount] = nil
-        end
-    else
-        for componentId in source.componentData do
-            source.componentData[componentId][fromRow] = nil
+                for _, array in source.componentData do
+                    array[fromRow] = array[source.entityCount]
+                    array[source.entityCount] = nil
+                end
+            end
+        else
+            for _, array in source.componentData do
+                array[fromRow] = nil
+            end
         end
     end
 
@@ -272,6 +301,23 @@ function Yumina.__FastPathMove(
     source.entityRow[entity] = nil
 
     self._entityIndex[entity] = destination
+    
+    source.dirtyFlags = bit32.bor(source.dirtyFlags, DIRTY_REMOVAL)
+    destination.dirtyFlags = bit32.bor(destination.dirtyFlags, DIRTY_ADDITION)
+end
+
+function Yumina.Has(self: Yumina, entity: EntityId, component: ComponentId): any?
+    local entityId = bit32.band(entity, ENTITY_MASK)
+    local archetype = self._entityIndex[entityId]
+    if not archetype then
+        return nil
+    end
+    local componentArray = archetype.componentData[component]
+    if not componentArray then
+        return nil
+    end
+    
+    return componentArray[archetype.entityRow[entityId]]
 end
 
 function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, data: T): Yumina
@@ -282,17 +328,28 @@ function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, d
         error("[Yumina]: Invalid entity reference", 0)
     end
 
-    local currentArchetype = self._entityIndex[entity]
+    local currentValue = self:Has(entity, component)
+    if currentValue == data then
+        return self
+    end
+
+    local currentArchetype = self._entityIndex[entityId]
     if not currentArchetype then
         currentArchetype = self:__CreateArchetype(CreateEmptyBitmasks())
-        self._entityIndex[entity] = currentArchetype
+        self._entityIndex[entityId] = currentArchetype
+
+        local arch = self._entityIndex[entityId]
+        local newRow = arch.entityCount + 1
+        arch.entities[newRow] = entityId
+        arch.entityRow[entityId] = newRow
+        arch.entityCount += 1
     end
 
     local newBitmasks = table.clone(currentArchetype.bitmasks)
     local maskIndex = GetBitmaskIndex(component)
     local bitPosition = GetBitPosition(component)
     newBitmasks[maskIndex] = bit32.bor(
-        newBitmasks[maskIndex],
+        currentArchetype.bitmasks[maskIndex],
         bit32.lshift(1, bitPosition)
     )
     
@@ -305,7 +362,7 @@ function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, d
             componentArray = {}
             currentArchetype.componentData[component] = componentArray
         end
-        componentArray[currentArchetype.entityRow[entity]] = data
+        componentArray[currentArchetype.entityRow[entityId]] = data
         currentArchetype.dirtyFlags = bit32.bor(currentArchetype.dirtyFlags, DIRTY_UPDATE)
         return self
     end
@@ -323,8 +380,25 @@ function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, d
         self._transitionCache[transitionKey] = transitionInfo
     end
 
-    transitionInfo.frequency += 1
-    self:__FastPathMove(entity, currentArchetype, targetArchetype, transitionInfo, data)
+    if currentArchetype.entityRow[entityId] then
+        transitionInfo.frequency += 1
+        self:__FastPathMove(entityId, currentArchetype, targetArchetype, transitionInfo, data)
+    else
+        local newRow = targetArchetype.entityCount + 1
+        targetArchetype.entities[newRow] = entityId
+        targetArchetype.entityRow[entityId] = newRow
+        targetArchetype.entityCount += 1
+        
+        local componentArray = targetArchetype.componentData[component]
+        if not componentArray then
+            componentArray = {}
+            targetArchetype.componentData[component] = componentArray
+        end
+        componentArray[newRow] = data
+        
+        self._entityIndex[entityId] = targetArchetype
+        targetArchetype.dirtyFlags = bit32.bor(targetArchetype.dirtyFlags, DIRTY_ADDITION)
+    end
     
     return self
 end
@@ -374,90 +448,119 @@ function Yumina.Remove(self: Yumina, entity: EntityId, component: ComponentId): 
     return self
 end
 
-local QueryObject = {}
-QueryObject.__index = QueryObject
+local QueryViewer = {}
+QueryViewer.__index = QueryViewer
 
-export type QueryObject = typeof(setmetatable({
+export type QueryViewer = typeof(setmetatable({
     archetypes = {} :: { Archetype },
     components = {} :: { ComponentId },
     includeBitmasks = {} :: { number },
     excludeBitmasks = {} :: { number },
     ecs = nil :: Yumina?
-}, QueryObject))
+}, QueryViewer))
 
-function QueryObject.new(q: {
+function QueryViewer.new(q: {
     archetypes: { Archetype },
     components: { ComponentId },
     includeBitmasks: { number },
     excludeBitmasks: { number },
     ecs: Yumina
-}): QueryObject
-    return setmetatable(q, QueryObject)
+}): QueryViewer
+    return setmetatable(q, QueryViewer)
 end
 
-function QueryObject.Include(self: QueryObject, componentIds: { ComponentId }): QueryObject
-    for _, componentId in componentIds do
-        local maskIndex = GetBitmaskIndex(componentId)
-        local bitPosition = GetBitPosition(componentId)
-        self.includeBitmasks[maskIndex] = bit32.bor(
-            self.includeBitmasks[maskIndex],
-            bit32.lshift(1, bitPosition)
-        )
-    end
+-- function QueryViewer.With(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+--     for _, componentId in componentIds do
+--         local maskIndex = GetBitmaskIndex(componentId)
+--         local bitPosition = GetBitPosition(componentId)
+--         self.includeBitmasks[maskIndex] = bit32.bor(
+--             self.includeBitmasks[maskIndex],
+--             bit32.lshift(1, bitPosition)
+--         )
+--     end
     
-    for i = #self.archetypes, 1, -1 do
-        local archetype = self.archetypes[i]
-        local matches = true
+--     for i = #self.archetypes, 1, -1 do
+--         local archetype = self.archetypes[i]
+--         local matches = true
         
-        for j = 1, NUM_BITMASKS do
-            if bit32.band(archetype.bitmasks[j], self.includeBitmasks[j]) ~= self.includeBitmasks[j] then
-                matches = false
-                break
-            end
-        end
+--         for j = 1, NUM_BITMASKS do
+--             if bit32.band(archetype.bitmasks[j], self.includeBitmasks[j]) ~= self.includeBitmasks[j] then
+--                 matches = false
+--                 break
+--             end
+--         end
         
-        if not matches then
-            local last = self.archetypes[#self.archetypes]
-            self.archetypes[i] = last
-            self.archetypes[#self.archetypes] = nil
-        end
-    end
+--         if not matches then
+--             local last = self.archetypes[#self.archetypes]
+--             self.archetypes[i] = last
+--             self.archetypes[#self.archetypes] = nil
+--         end
+--     end
     
-    return self
-end
+--     return self
+-- end
 
-function QueryObject.Exclude(self: QueryObject, componentIds: { ComponentId }): QueryObject
-    for _, componentId in componentIds do
-        local maskIndex = GetBitmaskIndex(componentId)
-        local bitPosition = GetBitPosition(componentId)
-        self.excludeBitmasks[maskIndex] = bit32.bor(
-            self.excludeBitmasks[maskIndex],
-            bit32.lshift(1, bitPosition)
-        )
-    end
+-- function QueryViewer.Without(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+--     for _, componentId in componentIds do
+--         local maskIndex = GetBitmaskIndex(componentId)
+--         local bitPosition = GetBitPosition(componentId)
+--         self.excludeBitmasks[maskIndex] = bit32.bor(
+--             self.excludeBitmasks[maskIndex],
+--             bit32.lshift(1, bitPosition)
+--         )
+--     end
     
-    for i = #self.archetypes, 1, -1 do
-        local archetype = self.archetypes[i]
-        local shouldExclude = false
+--     for i = #self.archetypes, 1, -1 do
+--         local archetype = self.archetypes[i]
+--         local shouldExclude = false
         
-        for j = 1, NUM_BITMASKS do
-            if bit32.band(archetype.bitmasks[j], self.excludeBitmasks[j]) ~= 0 then
-                shouldExclude = true
-                break
-            end
-        end
+--         for j = 1, NUM_BITMASKS do
+--             if bit32.band(archetype.bitmasks[j], self.excludeBitmasks[j]) ~= 0 then
+--                 shouldExclude = true
+--                 break
+--             end
+--         end
         
-        if shouldExclude then
-            local last = self.archetypes[#self.archetypes]
-            self.archetypes[i] = last
-            self.archetypes[#self.archetypes] = nil
-        end
-    end
+--         if shouldExclude then
+--             local last = self.archetypes[#self.archetypes]
+--             self.archetypes[i] = last
+--             self.archetypes[#self.archetypes] = nil
+--         end
+--     end
     
-    return self
-end
+--     return self
+-- end
 
-function QueryObject.View(self: QueryObject): () -> (EntityId?, ...any?)
+-- -- // FIXME: The behavior is not working as expected
+-- function QueryViewer.Any(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+--     for _, componentId in componentIds do
+--         local maskIndex = GetBitmaskIndex(componentId)
+--         local bitPosition = GetBitPosition(componentId)
+--         self.includeBitmasks[maskIndex] = bit32.bor(
+--             self.includeBitmasks[maskIndex],
+--             bit32.lshift(1, bitPosition)
+--         )
+--     end
+--     for i = #self.archetypes, 1, -1 do
+--         local archetype = self.archetypes[i]
+--         local matches = false
+--         for j = 1, NUM_BITMASKS do
+--             if bit32.band(archetype.bitmasks[j], self.includeBitmasks[j]) ~= 0 then
+--                 matches = true
+--                 break
+--             end
+--         end
+--         if not matches then
+--             local last = self.archetypes[#self.archetypes]
+--             self.archetypes[i] = last
+--             self.archetypes[#self.archetypes] = nil
+--         end
+--     end
+
+--     return self
+-- end
+
+function QueryViewer.View(self: QueryViewer): () -> (EntityId?, ...any?)
     local currentArchetypeIndex = 1
     local currentEntityIndex = 1
     local currentArchetype = self.archetypes[currentArchetypeIndex]
@@ -467,11 +570,14 @@ function QueryObject.View(self: QueryObject): () -> (EntityId?, ...any?)
     
     local componentIndices = table.create(numComponents)
     for i, componentId in self.components do
-        componentIndices[i :: number] = componentId
-    end
-    
+        componentIndices[i] = componentId
+    end 
     local componentValues = table.create(numComponents)
-    
+    if currentArchetype then
+        for i, componentId in componentIndices do
+            componentArrays[i] = currentArchetype.componentData[componentId]
+        end
+    end
     return function(): (EntityId?, ...any?)
         while currentArchetype do
             if currentArchetype.entityCount == 0 then
@@ -489,7 +595,6 @@ function QueryObject.View(self: QueryObject): () -> (EntityId?, ...any?)
             while currentEntityIndex <= currentArchetype.entityCount do
                 local entityId = currentArchetype.entities[currentEntityIndex]
                 local row = currentArchetype.entityRow[entityId]
-                
                 for i = 1, numComponents do
                     local componentArray = componentArrays[i]
                     componentValues[i] = if componentArray then componentArray[row] else nil
@@ -513,7 +618,7 @@ function QueryObject.View(self: QueryObject): () -> (EntityId?, ...any?)
     end
 end
 
-function Yumina.Query(self: Yumina, components: {ComponentId}): QueryObject
+function Yumina.Query(self: Yumina, components: { ComponentId }): QueryViewer
     local queryBitmasks = CreateEmptyBitmasks()
     
     for _, componentId in components do
@@ -544,7 +649,6 @@ function Yumina.Query(self: Yumina, components: {ComponentId}): QueryObject
     
     local matchingArchetypes = table.create(32)
     local matchCount = 0
-    
     for _, archetype in self._archetypeIndex do
         local matches = true
         for i = 1, NUM_BITMASKS do
@@ -553,14 +657,13 @@ function Yumina.Query(self: Yumina, components: {ComponentId}): QueryObject
                 break
             end
         end
-        
         if matches then
             matchCount += 1
             matchingArchetypes[matchCount] = archetype
         end
     end
     
-    local query = QueryObject.new({
+    local query = QueryViewer.new({
         archetypes = matchingArchetypes,
         includeBitmasks = queryBitmasks,
         excludeBitmasks = CreateEmptyBitmasks(),
@@ -572,37 +675,23 @@ function Yumina.Query(self: Yumina, components: {ComponentId}): QueryObject
     return query
 end
 
-function Yumina.GetArchetypeInfo(self: Yumina, entity: EntityId): { [string]: any }?
-    local entityId = bit32.band(entity, ENTITY_MASK)
-    local archetype = self._entityIndex[entityId]
-    
-    if not archetype then
-        return nil
-    end
-    
-    return {
-        bitmasks = table.clone(archetype.bitmasks),
-        entityCount = archetype.entityCount,
-        components = table.create(BITS_PER_MASK * NUM_BITMASKS),
-        row = archetype.entityRow[entityId]
-    }
-end
+-- local BatchObject = {}
+-- BatchObject.__index = BatchObject
 
-function Yumina.Has(self: Yumina, entity: EntityId, component: ComponentId): any?
-    local entityId = bit32.band(entity, ENTITY_MASK)
-    local archetype = self._entityIndex[entityId]
-    
-    if not archetype then
-        return nil
-    end
-    
-    local componentArray = archetype.componentData[component]
-    if not componentArray then
-        return nil
-    end
-    
-    return componentArray[archetype.entityRow[entityId]]
-end
+-- export type BatchObject = typeof(setmetatable({}, BatchObject))
+
+-- function BatchObject.Set(self: BatchObject)
+
+-- end
+
+-- function BatchObject.Remove(self: BatchObject)
+
+-- end
+
+-- -- // TODO: Implement batch processing
+-- function Yumina.Batch(self: Yumina): BatchObject
+--     return setmetatable({}, BatchObject)
+-- end
 
 function Yumina.Cleanup(self: Yumina)
     for archetypeKey, archetype in self._archetypeIndex do
