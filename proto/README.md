@@ -2,7 +2,7 @@
 
 Yumina is a high-performance Entity Component System (ECS) library written in Luau.
 
-> [!INFORMATION]
+> [!NOTE]
 > Luau Yumina is a prototype to its [C++ version]().
 
 ## Philosophy
@@ -174,7 +174,7 @@ end)
 
 ## Debug Tools
 
-> [!INFORMATION]
+> [!NOTE]
 > In progress!
 
 ```lua
