@@ -204,8 +204,8 @@ local ERROR_TYPE = {
 }
 
 local CACHE_CONFIG = {
-    EDGE_THRESHOLD = 1200,
-    MIN_FREQUENCY = 5
+	EDGE_THRESHOLD = 1200,
+	MIN_FREQUENCY = 5
 }
 
 local bit32 = bit32
@@ -580,81 +580,81 @@ local function CreateTransitionInfo(self: Yumina, source: Archetype, destination
 end
 
 function Yumina.__FastPathMove<T>(
-    self: Yumina,
-    entity: EntityId,
-    source: Archetype,
-    destination: Archetype,
-    transition: TransitionInfo,
-    newComponentsData: { [ComponentId]: T }?
+	self: Yumina,
+	entity: EntityId,
+	source: Archetype,
+	destination: Archetype,
+	transition: TransitionInfo,
+	newComponentsData: { [ComponentId]: T }?
 )
-    local toRow = destination.entityCount + 1
-    local fromRow = source.entityRow[entity]
-    local sourceCount = source.entityCount
-    local sharedCount = #transition.sharedComponents
-    
-    local dstComponents = destination.componentData
-    local srcComponents = source.componentData
-    
-    local expectedSize = toRow + 32
-    for _, componentId in transition.sharedComponents do
-        if not dstComponents[componentId] then
-            dstComponents[componentId] = table.create(expectedSize)
-        end
-    end
-    
-    if fromRow and sharedCount <= 3 then
-        for _, componentId in transition.sharedComponents do
-            local srcColumn = srcComponents[componentId]
-            local dstColumn = dstComponents[componentId]
-            dstColumn[toRow] = srcColumn[fromRow]
-            srcColumn[fromRow] = srcColumn[sourceCount]
-            srcColumn[sourceCount] = nil
-        end
-        
-        if fromRow < sourceCount then
-            local lastEntity = source.entities[sourceCount]
-            source.entities[fromRow] = lastEntity
-            source.entityRow[lastEntity] = fromRow
-        end
-    
-    elseif fromRow then
-        for _, componentId in transition.sharedComponents do
-            local srcColumn = srcComponents[componentId]
-            local dstColumn = dstComponents[componentId]
-            table.move(srcColumn, fromRow, fromRow, toRow, dstColumn)
-            
-            if fromRow < sourceCount then
-                table.move(srcColumn, sourceCount, sourceCount, fromRow)
-            end
-            srcColumn[sourceCount] = nil
-        end
-        
-        if fromRow < sourceCount then
-            local lastEntity = source.entities[sourceCount]
-            source.entities[fromRow] = lastEntity
-            source.entityRow[lastEntity] = fromRow
-        end
-    end
-    if fromRow then
-        source.entityCount = sourceCount - 1
-        source.entities[sourceCount] = nil
-        source.entityRow[entity] = nil
-        source.dirtyFlags = bit32.bor(source.dirtyFlags, DIRTY_REMOVAL)
-    end
-    if newComponentsData then
-        for _, componentId in transition.addedComponents do
-            dstComponents[componentId] = dstComponents[componentId] or table.create(expectedSize)
-            dstComponents[componentId][toRow] = newComponentsData[componentId]
-        end
-    end
+	local toRow = destination.entityCount + 1
+	local fromRow = source.entityRow[entity]
+	local sourceCount = source.entityCount
+	local sharedCount = #transition.sharedComponents
 
-    destination.entities[toRow] = entity
-    destination.entityRow[entity] = toRow 
-    destination.entityCount = toRow
-    destination.dirtyFlags = bit32.bor(destination.dirtyFlags, DIRTY_ADDITION)
-    self._entityIndex[entity] = destination
-    
-    self.OnTransition:Fire(entity, source, destination)
+	local dstComponents = destination.componentData
+	local srcComponents = source.componentData
+
+	local expectedSize = toRow + 32
+	for _, componentId in transition.sharedComponents do
+		if not dstComponents[componentId] then
+			dstComponents[componentId] = table.create(expectedSize)
+		end
+	end
+
+	if fromRow and sharedCount <= 3 then
+		for _, componentId in transition.sharedComponents do
+			local srcColumn = srcComponents[componentId]
+			local dstColumn = dstComponents[componentId]
+			dstColumn[toRow] = srcColumn[fromRow]
+			srcColumn[fromRow] = srcColumn[sourceCount]
+			srcColumn[sourceCount] = nil
+		end
+
+		if fromRow < sourceCount then
+			local lastEntity = source.entities[sourceCount]
+			source.entities[fromRow] = lastEntity
+			source.entityRow[lastEntity] = fromRow
+		end
+
+	elseif fromRow then
+		for _, componentId in transition.sharedComponents do
+			local srcColumn = srcComponents[componentId]
+			local dstColumn = dstComponents[componentId]
+			table.move(srcColumn, fromRow, fromRow, toRow, dstColumn)
+
+			if fromRow < sourceCount then
+				table.move(srcColumn, sourceCount, sourceCount, fromRow)
+			end
+			srcColumn[sourceCount] = nil
+		end
+
+		if fromRow < sourceCount then
+			local lastEntity = source.entities[sourceCount]
+			source.entities[fromRow] = lastEntity
+			source.entityRow[lastEntity] = fromRow
+		end
+	end
+	if fromRow then
+		source.entityCount = sourceCount - 1
+		source.entities[sourceCount] = nil
+		source.entityRow[entity] = nil
+		source.dirtyFlags = bit32.bor(source.dirtyFlags, DIRTY_REMOVAL)
+	end
+	if newComponentsData then
+		for _, componentId in transition.addedComponents do
+			dstComponents[componentId] = dstComponents[componentId] or table.create(expectedSize)
+			dstComponents[componentId][toRow] = newComponentsData[componentId]
+		end
+	end
+
+	destination.entities[toRow] = entity
+	destination.entityRow[entity] = toRow 
+	destination.entityCount = toRow
+	destination.dirtyFlags = bit32.bor(destination.dirtyFlags, DIRTY_ADDITION)
+	self._entityIndex[entity] = destination
+
+	self.OnTransition:Fire(entity, source, destination)
 end
 
 --[[
@@ -688,65 +688,65 @@ end
     @return Yumina Self for chaining
 ]]
 function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, data: T): Yumina
-    local entityId = ValidateEntity(self, entity)
-    local currentArchetype = self._entityIndex[entityId]
-    if not currentArchetype then
-        local maskIndex = GetBitmaskIndex(component)
-        local bitMask = bit32.lshift(1, GetBitPosition(component))
-        local newArchetype = self:__CreateArchetype({
-            maskIndex == 1 and bitMask or 0,
-            maskIndex == 2 and bitMask or 0
-        })
-        newArchetype.componentData[component] = table.create(32)
-        newArchetype.componentData[component][1] = data
-        newArchetype.entities[1] = entityId
-        newArchetype.entityRow[entityId] = 1
-        newArchetype.entityCount = 1
-        self._entityIndex[entityId] = newArchetype
-        self.OnSet:Fire(entity, component, data)
-        return self
-    end
+	local entityId = ValidateEntity(self, entity)
+	local currentArchetype = self._entityIndex[entityId]
+	if not currentArchetype then
+		local maskIndex = GetBitmaskIndex(component)
+		local bitMask = bit32.lshift(1, GetBitPosition(component))
+		local newArchetype = self:__CreateArchetype({
+			maskIndex == 1 and bitMask or 0,
+			maskIndex == 2 and bitMask or 0
+		})
+		newArchetype.componentData[component] = table.create(32)
+		newArchetype.componentData[component][1] = data
+		newArchetype.entities[1] = entityId
+		newArchetype.entityRow[entityId] = 1
+		newArchetype.entityCount = 1
+		self._entityIndex[entityId] = newArchetype
+		self.OnSet:Fire(entity, component, data)
+		return self
+	end
 
-    local maskIndex = GetBitmaskIndex(component)
-    local bitPosition = GetBitPosition(component)
-    local mask = bit32.lshift(1, bitPosition)
-    if bit32.band(currentArchetype.bitmasks[maskIndex], mask) ~= 0 then
-        local row = currentArchetype.entityRow[entityId]
-        local componentArray = currentArchetype.componentData[component]
-        componentArray[row] = data
-        currentArchetype.dirtyFlags = bit32.bor(currentArchetype.dirtyFlags, DIRTY_UPDATE)
-        self.OnSet:Fire(entity, component, data)
-        return self
-    end
+	local maskIndex = GetBitmaskIndex(component)
+	local bitPosition = GetBitPosition(component)
+	local mask = bit32.lshift(1, bitPosition)
+	if bit32.band(currentArchetype.bitmasks[maskIndex], mask) ~= 0 then
+		local row = currentArchetype.entityRow[entityId]
+		local componentArray = currentArchetype.componentData[component]
+		componentArray[row] = data
+		currentArchetype.dirtyFlags = bit32.bor(currentArchetype.dirtyFlags, DIRTY_UPDATE)
+		self.OnSet:Fire(entity, component, data)
+		return self
+	end
 
-    local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]}
-    newBits[maskIndex] = bit32.bor(newBits[maskIndex], mask)
+	local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]}
+	newBits[maskIndex] = bit32.bor(newBits[maskIndex], mask)
 
-    local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
-    local edgeInfo = self._edgeCache[transitionKey]
-    local targetArchetype
-    local transition
+	local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
+	local edgeInfo = self._edgeCache[transitionKey]
+	local targetArchetype
+	local transition
 
-    if edgeInfo then
-        targetArchetype = edgeInfo.to
-        transition = edgeInfo.transition
-        transition.frequency += 1
-    else
-        targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)]
-        if not targetArchetype then
-            targetArchetype = self:__CreateArchetype(newBits)
-        end
-        transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
-        self._edgeCache[transitionKey] = {
-            to = targetArchetype,
-            transition = transition
-        }
-        transition.frequency += 1
-    end
+	if edgeInfo then
+		targetArchetype = edgeInfo.to
+		transition = edgeInfo.transition
+		transition.frequency += 1
+	else
+		targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)]
+		if not targetArchetype then
+			targetArchetype = self:__CreateArchetype(newBits)
+		end
+		transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
+		self._edgeCache[transitionKey] = {
+			to = targetArchetype,
+			transition = transition
+		}
+		transition.frequency += 1
+	end
 
-    self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition, {[component] = data})
-    self.OnSet:Fire(entity, component, data)
-    return self
+	self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition, {[component] = data})
+	self.OnSet:Fire(entity, component, data)
+	return self
 end
 
 --[[
@@ -757,35 +757,35 @@ end
     @return Yumina Self for chaining
 ]]
 function Yumina.Remove(self: Yumina, entity: EntityId, component: ComponentId): Yumina
-    local entityId = ValidateEntity(self, entity)
-    local currentArchetype = self._entityIndex[entityId]
-    if not currentArchetype then
+	local entityId = ValidateEntity(self, entity)
+	local currentArchetype = self._entityIndex[entityId]
+	if not currentArchetype then
 		return self
 	end
 
-    local maskIndex = GetBitmaskIndex(component)
-    local mask = bit32.lshift(1, GetBitPosition(component))
-    if bit32.band(currentArchetype.bitmasks[maskIndex], mask) == 0 then
-        return self
-    end
+	local maskIndex = GetBitmaskIndex(component)
+	local mask = bit32.lshift(1, GetBitPosition(component))
+	if bit32.band(currentArchetype.bitmasks[maskIndex], mask) == 0 then
+		return self
+	end
 
-    local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]} 
-    newBits[maskIndex] = bit32.band(newBits[maskIndex], bit32.bnot(mask))
+	local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]} 
+	newBits[maskIndex] = bit32.band(newBits[maskIndex], bit32.bnot(mask))
 
-    local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
-    local edgeInfo = self._edgeCache[transitionKey]
-    if edgeInfo then
-        self:__FastPathMove(entityId, currentArchetype, edgeInfo.to, edgeInfo.transition)
-        return self
-    end
+	local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
+	local edgeInfo = self._edgeCache[transitionKey]
+	if edgeInfo then
+		self:__FastPathMove(entityId, currentArchetype, edgeInfo.to, edgeInfo.transition)
+		return self
+	end
 
-    local targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)] or
-        self:__CreateArchetype(newBits)
-    
-    local transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
-    self._edgeCache[transitionKey] = { to = targetArchetype, transition = transition }
-    self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition)
-    return self
+	local targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)] or
+		self:__CreateArchetype(newBits)
+
+	local transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
+	self._edgeCache[transitionKey] = { to = targetArchetype, transition = transition }
+	self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition)
+	return self
 end
 
 --[[
@@ -800,7 +800,6 @@ export type QueryViewer = typeof(setmetatable({
 	components = {} :: { ComponentId },
 	includeBitmasks = {} :: { number },
 	excludeBitmasks = {} :: { number },
-	ecs = nil :: Yumina?
 }, QueryViewer))
 
 function QueryViewer.new(q: {
@@ -808,7 +807,6 @@ function QueryViewer.new(q: {
 	components: { ComponentId },
 	includeBitmasks: { number },
 	excludeBitmasks: { number },
-	ecs: Yumina
 	}): QueryViewer
 	return setmetatable(q, QueryViewer)
 end
@@ -1188,10 +1186,9 @@ function Yumina.Query(self: Yumina, components: { ComponentId }): QueryViewer
 
 		local query = QueryViewer.new({
 			archetypes = result,
-			includeBitmasks = {maskIndex == 1 and bitMask or 0, maskIndex == 2 and bitMask or 0},
-			excludeBitmasks = {0, 0},
+			includeBitmasks = { maskIndex == 1 and bitMask or 0, maskIndex == 2 and bitMask or 0 },
+			excludeBitmasks = { 0, 0 },
 			components = components,
-			ecs = self
 		})
 		self._queryCache[queryKey] = query
 		self.OnCached:Fire("Query", queryKey)
@@ -1284,25 +1281,25 @@ end
     @description Performs cache cleanup and maintenance
 ]]
 function Yumina.Cleanup(self: Yumina): ()
-    if self._nextId >= ENTITY_MASK then
-        Tools.Debugger.ThrowError(
-            ERROR_TYPE.MEMORY_ERROR,
-            "Entity ID space exhausted"
-        )
-    end
+	if self._nextId >= ENTITY_MASK then
+		Tools.Debugger.ThrowError(
+			ERROR_TYPE.MEMORY_ERROR,
+			"Entity ID space exhausted"
+		)
+	end
 
-    self._queryCache = {}
-    if #self._edgeCache > CACHE_CONFIG.EDGE_THRESHOLD then
-        local newCache = {}
-        for key, info in self._edgeCache do
-            if info.transition.frequency >= CACHE_CONFIG.MIN_FREQUENCY then
-                newCache[key] = info
-            end
-        end
-        self._edgeCache = newCache
-    end
-    
-    self.OnCleanup:Fire()
+	self._queryCache = {}
+	if #self._edgeCache > CACHE_CONFIG.EDGE_THRESHOLD then
+		local newCache = {}
+		for key, info in self._edgeCache do
+			if info.transition.frequency >= CACHE_CONFIG.MIN_FREQUENCY then
+				newCache[key] = info
+			end
+		end
+		self._edgeCache = newCache
+	end
+
+	self.OnCleanup:Fire()
 end
 
 return {
