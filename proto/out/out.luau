@@ -4,9 +4,9 @@
 
 type Signal<T...> = {
 	_head: Connection<T...>?,
-	Connect: (self: Signal<T...>, fn: (...any) -> ()) -> Connection<T...>,
-	Fire: (self: Signal<T...>, ...any) -> (),
-	Wait: (self: Signal<T...>) -> ...any,
+	Connect: (self: Signal<T...>, fn: (T...) -> ()) -> Connection<T...>,
+	Fire: (self: Signal<T...>, T...) -> (),
+	Wait: (self: Signal<T...>) -> (),
 	Once: (self: Signal<T...>, fn: (T...) -> ()) -> Connection<T...>,
 	DisconnectAll: (self: Signal<T...>) -> (),
 	Destroy: (self: Signal<T...>) -> ()
@@ -142,21 +142,40 @@ end
 type EntityId = number
 type ComponentId = number
 type Generation = number
+
+type Edge = {
+	from: Archetype,
+	to: Archetype,
+	next: Edge?,
+	prev: Edge?,
+	componentId: ComponentId,
+	transition: TransitionInfo
+}
+
 export type Archetype = {
 	bitmasks: { [number]: number },
 	entities: { [number]: EntityId },
 	entityRow: { [EntityId]: number },
 	componentData: { [ComponentId]: { [number]: any } },
 	entityCount: number,
-	dirtyFlags: number
+	dirtyFlags: number,
+	addEdges: { [ComponentId]: Edge },
+	removeEdges: { [ComponentId]: Edge },
+	edgeRefs: {
+		next: Edge?,
+		prev: Edge?
+	}
 }
+
 type MoveCommand = {
 	source: Archetype,
 	destination: Archetype,
 	moves: { [number]: { entityId: EntityId, fromRow: number, toRow: number } },
 	moveCount: number
 }
+
 type TransitionKey = number
+
 type TransitionInfo = {
 	source: Archetype,
 	destination: Archetype,
@@ -165,12 +184,14 @@ type TransitionInfo = {
 	removedComponents: { ComponentId },
 	frequency: number
 }
+
 type ArchetypeEdgeCache = {
 	[TransitionKey]: {
 		to: Archetype,
 		transition: TransitionInfo
 	}
 }
+
 type QueryCache = {
 	archetypes: { Archetype },
 	includeBitmasks: { number },
@@ -201,11 +222,6 @@ local ERROR_TYPE = {
 	QUERY_ERROR = "QUERY_ERROR",
 	TRANSITION_ERROR = "TRANSITION_ERROR",
 	MEMORY_ERROR = "MEMORY_ERROR"
-}
-
-local CACHE_CONFIG = {
-	EDGE_THRESHOLD = 1200,
-	MIN_FREQUENCY = 5
 }
 
 local bit32 = bit32
@@ -520,7 +536,10 @@ function Yumina.__CreateArchetype(self: Yumina, bitmasks: { number }): Archetype
 		entities = {},
 		entityRow = {},
 		entityCount = 0,
-		dirtyFlags = DIRTY_ADDITION
+		dirtyFlags = DIRTY_ADDITION,
+		addEdges = {},
+		removeEdges = {},
+		edgeRefs = { next = nil, prev = nil }
 	}
 
 	local key = GetArchetypeKey(bitmasks)
@@ -577,6 +596,29 @@ local function CreateTransitionInfo(self: Yumina, source: Archetype, destination
 	self._edgeCache[transitionKey] = { to = destination, transition = transition }
 	self.OnCached:Fire("Transition", transitionKey)
 	return transition
+end
+
+function Yumina.__AddEdge(self: Yumina, from: Archetype, to: Archetype, componentId: ComponentId): Edge
+	local edge = {
+		from = from,
+		to = to,
+		next = nil,
+		prev = nil,
+		componentId = componentId,
+		transition = CreateTransitionInfo(self, from, to)
+	} :: Edge
+
+	if to.edgeRefs.next then
+		edge.next = to.edgeRefs and to.edgeRefs.next
+		to.edgeRefs.next.prev = edge
+	end
+	to.edgeRefs.next = edge
+	edge.prev = from.edgeRefs.prev
+
+	from.addEdges[componentId] = edge
+	to.removeEdges[componentId] = edge
+
+	return edge
 end
 
 function Yumina.__FastPathMove<T>(
@@ -688,8 +730,9 @@ end
     @return Yumina Self for chaining
 ]]
 function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, data: T): Yumina
-	local entityId = ValidateEntity(self, entity)
+	local entityId = if DEBUG_MODE then ValidateEntity(self, entity) else entity
 	local currentArchetype = self._entityIndex[entityId]
+
 	if not currentArchetype then
 		local maskIndex = GetBitmaskIndex(component)
 		local bitMask = bit32.lshift(1, GetBitPosition(component))
@@ -697,6 +740,7 @@ function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, d
 			maskIndex == 1 and bitMask or 0,
 			maskIndex == 2 and bitMask or 0
 		})
+
 		newArchetype.componentData[component] = table.create(32)
 		newArchetype.componentData[component][1] = data
 		newArchetype.entities[1] = entityId
@@ -708,43 +752,33 @@ function Yumina.Set<T>(self: Yumina, entity: EntityId, component: ComponentId, d
 	end
 
 	local maskIndex = GetBitmaskIndex(component)
-	local bitPosition = GetBitPosition(component)
-	local mask = bit32.lshift(1, bitPosition)
+	local mask = bit32.lshift(1, GetBitPosition(component))
+
 	if bit32.band(currentArchetype.bitmasks[maskIndex], mask) ~= 0 then
 		local row = currentArchetype.entityRow[entityId]
-		local componentArray = currentArchetype.componentData[component]
-		componentArray[row] = data
+		currentArchetype.componentData[component][row] = data
 		currentArchetype.dirtyFlags = bit32.bor(currentArchetype.dirtyFlags, DIRTY_UPDATE)
 		self.OnSet:Fire(entity, component, data)
 		return self
 	end
 
-	local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]}
-	newBits[maskIndex] = bit32.bor(newBits[maskIndex], mask)
-
-	local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
-	local edgeInfo = self._edgeCache[transitionKey]
-	local targetArchetype
-	local transition
-
-	if edgeInfo then
-		targetArchetype = edgeInfo.to
-		transition = edgeInfo.transition
-		transition.frequency += 1
-	else
-		targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)]
-		if not targetArchetype then
-			targetArchetype = self:__CreateArchetype(newBits)
-		end
-		transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
-		self._edgeCache[transitionKey] = {
-			to = targetArchetype,
-			transition = transition
-		}
-		transition.frequency += 1
+	local edge = currentArchetype.addEdges[component]
+	if edge then
+		self:__FastPathMove(entityId, currentArchetype, edge.to, edge.transition, {[component] = data})
+		self.OnSet:Fire(entity, component, data)
+		return self
 	end
 
-	self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition, {[component] = data})
+	local newBits = { currentArchetype.bitmasks[1], currentArchetype.bitmasks[2] }
+	newBits[maskIndex] = bit32.bor(newBits[maskIndex], mask)
+
+	local targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)]
+	if not targetArchetype then
+		targetArchetype = self:__CreateArchetype(newBits)
+	end
+
+	local edg2 = self:__AddEdge(currentArchetype, targetArchetype, component)
+	self:__FastPathMove(entityId, currentArchetype, targetArchetype, edg2.transition, { [component] = data })
 	self.OnSet:Fire(entity, component, data)
 	return self
 end
@@ -769,22 +803,22 @@ function Yumina.Remove(self: Yumina, entity: EntityId, component: ComponentId): 
 		return self
 	end
 
-	local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]} 
-	newBits[maskIndex] = bit32.band(newBits[maskIndex], bit32.bnot(mask))
-
-	local transitionKey = GetTransitionKey(currentArchetype.bitmasks, newBits)
-	local edgeInfo = self._edgeCache[transitionKey]
-	if edgeInfo then
-		self:__FastPathMove(entityId, currentArchetype, edgeInfo.to, edgeInfo.transition)
+	local edge = currentArchetype.removeEdges[component]
+	if edge then
+		self:__FastPathMove(entityId, currentArchetype, edge.to, edge.transition)
 		return self
 	end
 
-	local targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)] or
-		self:__CreateArchetype(newBits)
+	local newBits = {currentArchetype.bitmasks[1], currentArchetype.bitmasks[2]} 
+	newBits[maskIndex] = bit32.band(newBits[maskIndex], bit32.bnot(mask))
 
-	local transition = CreateTransitionInfo(self, currentArchetype, targetArchetype)
-	self._edgeCache[transitionKey] = { to = targetArchetype, transition = transition }
-	self:__FastPathMove(entityId, currentArchetype, targetArchetype, transition)
+	local targetArchetype = self._archetypeIndex[GetArchetypeKey(newBits)]
+	if not targetArchetype then
+		targetArchetype = self:__CreateArchetype(newBits)
+	end
+
+	local edge2 = self:__AddEdge(targetArchetype, currentArchetype, component)
+	self:__FastPathMove(entityId, currentArchetype, edge2.from, edge2.transition)
 	return self
 end
 
@@ -814,10 +848,10 @@ end
 --[[
     @function QueryViewer.With
     @description Adds required components to query
-    @param componentIds {ComponentId} Components that must be present
+    @param componentIds { ComponentId } Components that must be present
     @return QueryViewer Self for chaining
 ]]
-function QueryViewer.With(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+function QueryViewer.__With(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
 	if _G.__YUMINA_DEBUG then
 		Tools.Debugger.AssertArgument(
 			#componentIds > 0,
@@ -874,7 +908,7 @@ end
     @param componentIds {ComponentId} Components that must not be present
     @return QueryViewer Self for chaining
 ]]
-function QueryViewer.Without(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+function QueryViewer.__Without(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
 	local newExcludeBitmasks = table.clone(self.excludeBitmasks)
 	for _, componentId in componentIds do
 		local maskIndex = GetBitmaskIndex(componentId)
@@ -910,7 +944,7 @@ end
     @param componentIds {ComponentId} Components to match any of
     @return QueryViewer Self for chaining
 ]]
-function QueryViewer.Any(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
+function QueryViewer.__Any(self: QueryViewer, componentIds: { ComponentId }): QueryViewer
 	local anyBitmasks = CreateEmptyBitmasks()
 	for _, componentId in componentIds do
 		local maskIndex = GetBitmaskIndex(componentId)
@@ -1157,7 +1191,7 @@ end
 --[[
     @function Yumina.Query
     @description Creates a query for entities matching component criteria
-    @param components {ComponentId} Array of component IDs to query for
+    @param components { ComponentId } Array of component IDs to query for
     @return QueryViewer Query iterator
 ]]
 function Yumina.Query(self: Yumina, components: { ComponentId }): QueryViewer
@@ -1288,17 +1322,25 @@ function Yumina.Cleanup(self: Yumina): ()
 		)
 	end
 
-	self._queryCache = {}
-	if #self._edgeCache > CACHE_CONFIG.EDGE_THRESHOLD then
-		local newCache = {}
-		for key, info in self._edgeCache do
-			if info.transition.frequency >= CACHE_CONFIG.MIN_FREQUENCY then
-				newCache[key] = info
+	for _, archetype in pairs(self._archetypeIndex) do
+		if #archetype.entities == 0 then
+			for componentId, edge in pairs(archetype.addEdges) do
+				edge.from.addEdges[componentId] = nil
+				edge.to.removeEdges[componentId] = nil
+				if edge.next then
+					edge.next.prev = edge.prev
+				end
+				if edge.prev then
+					edge.prev.next = edge.next
+				end
 			end
+			archetype.addEdges = {}
+			archetype.removeEdges = {}
+			archetype.edgeRefs = { next = nil, prev = nil }
 		end
-		self._edgeCache = newCache
 	end
 
+	self._queryCache = {}
 	self.OnCleanup:Fire()
 end
 

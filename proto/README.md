@@ -135,7 +135,7 @@ CheckEntity(districtId)
 ## Events
 ```lua
 -- Component changes
-world.OnSet:Connect(function(entity: number, componentId: number, data: any)
+world.OnSet:Connect(function(entity: number, componentId: number, data: any?)
     -- Handle component change
 end)
 
@@ -158,6 +158,7 @@ end)
 ## API Reference
 
 ### Core 
+
 - `World:Entity()` - Creates a new entity
 - `World:Set(entity, component, value)` - Sets a component value for an entity
 - `World:Has(entity, component)` - Checks if entity has a component
@@ -167,10 +168,14 @@ end)
 
 ### Queries
 - `World:Query(components)` - Creates a query for entities with specified components
+- `Query:View()` - Returns iterator for query results
+
+> [!INFO]
+> In testing methods
+
 - `Query:With(components)` - Adds required components to query
 - `Query:Without(components)` - Excludes entities with specified components
 - `Query:Any(components)` - Matches entities with any of the components
-- `Query:View()` - Returns iterator for query results
 
 ## Debug Tools
 
