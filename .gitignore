@@ -1,55 +1,11 @@
-# Build and binary files
-[Bb]in/
-[Oo]bj/
-[Bb]uild/
-[Dd]ebug/
-[Rr]elease/
+# Project place file
+/YuminaECS Prototype.rbxlx
 
-# IDE specific files
-.vs/
-.vscode/
-*.userprefs
-*.user
-*.suo
-*.sln.docstates
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
 
-# Unity specific
-/[Ll]ibrary/
-/[Tt]emp/
-/[Oo]bj/
-/[Bb]uild/
-/[Bb]uilds/
-/[Ll]ogs/
-/[Uu]ser[Ss]ettings/
-*.pidb
-*.booproj
-*.svd
-*.pdb
-*.mdb
-*.log
-
-# OS generated
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Backup files
-*.bak
-*.backup
-*~
-
-# Package files
-*.7z
-*.zip
-*.rar
-*.tar
-*.gz
-
-# Other
-*.cache
-*.temp
-*.tmp
+.vscode/
+.idea/
+.vs/
